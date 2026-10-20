@@ -255,3 +255,18 @@ button { cursor: pointer; border: 0; background: none; }
 .toast button { color: var(--sun); font-weight: 700; }
 
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+/* free mode: search by hand */
+.manual { background: var(--card); border-radius: var(--radius); padding: 2px 14px 10px; margin-bottom: 12px; }
+.manual .sec { margin-top: 14px; }
+.srow { display: flex; align-items: center; gap: 6px; padding: 9px 0; border-top: 1px solid var(--line); flex-wrap: wrap; }
+.srow:first-of-type { border-top: 0; }
+.sq { flex: 1 1 140px; font-weight: 600; font-size: 15px; min-width: 0; }
+.sbtn { border-radius: 8px; padding: 7px 10px; font-size: 13px; font-weight: 700; color: #fff; }
+.sbtn.vk { background: var(--vk); }
+.sbtn.tg { background: var(--tg); }
+.sbtn.fb { background: var(--fb); }
+.add-link { display: flex; gap: 8px; }
+.add-link input { flex: 1; min-width: 0; }
+#shareHint { margin: 6px 0 4px; }
+#results > .sec { margin-top: 18px; }

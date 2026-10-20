@@ -57,6 +57,12 @@
     <section id="tab-groups" class="tab" hidden>
       <div id="progress" class="progress" hidden><div class="progress-fill"></div><span></span></div>
       <div id="errors"></div>
+      <div id="searchBox"></div>
+      <form id="addLinkForm" class="add-link">
+        <input id="newLink" inputmode="url" autocomplete="off" placeholder="Ссылка на группу: vk.com/…, t.me/…">
+        <button class="ghost" type="submit">Добавить</button>
+      </form>
+      <p id="shareHint" class="hint"></p>
       <div class="filters" id="filters"></div>
       <div id="results"></div>
     </section>
@@ -74,11 +80,13 @@
     <section id="tab-settings" class="tab" hidden>
       <div class="set">
         <h2 class="sec">Claude — разбор поста</h2>
-        <p class="hint">Без ключа приложение подбирает запросы по словам из поста. С ключом Claude понимает суть услуги, придумывает, где искать аудиторию, оценивает группы и читает их правила.</p>
+        <p class="hint">Не обязательно. Без ключа всё бесплатно: запросы подбираются по словам из поста. С ключом Claude понимает суть услуги, лучше подбирает, где искать аудиторию, и оценивает найденные группы — это стоит доли цента за пост.</p>
         <label class="field-label" for="claudeKey">Ключ API</label>
         <input id="claudeKey" type="password" autocomplete="off" placeholder="sk-ant-…">
         <label class="field-label" for="model">Модель</label>
         <select id="model"></select>
+        <label class="toggle"><input type="checkbox" id="webSearch"> Искать группы через Claude</label>
+        <p class="hint">Платно: примерно 3–8 центов за поиск на одной площадке. Выключено — поиск бесплатный: вы ищете сами по готовым ссылкам, а приложение ведёт учёт.</p>
         <div class="btns">
           <button id="saveClaude" class="primary">Сохранить ключ</button>
           <button id="getClaudeKey" class="ghost">Где взять ключ</button>
@@ -98,9 +106,9 @@
       </div>
 
       <div class="set">
-        <h2 class="sec">Telegram — платно</h2>
-        <p class="hint">У Telegram нет открытого поиска каналов и чатов. Поиск идёт через каталог TGStat по вашему платному тарифу API. В чатах участники обычно могут писать сами, в каналах публикует только админ, так что там размещение через него.</p>
-        <label class="toggle"><input type="checkbox" id="tgEnabled"> Искать в Telegram</label>
+        <h2 class="sec">Telegram через TGStat API — платно</h2>
+        <p class="hint">Бесплатно Telegram-каналы и чаты ищутся по ссылкам на сайт TGStat. Если у вас есть платный тариф TGStat API, приложение будет само собирать список с числом подписчиков. В чатах участники обычно могут писать сами, в каналах публикует только админ.</p>
+        <label class="toggle"><input type="checkbox" id="tgEnabled"> Искать через TGStat API</label>
         <label class="field-label" for="tgstatToken">Токен TGStat API</label>
         <input id="tgstatToken" type="password" autocomplete="off" placeholder="токен из личного кабинета TGStat">
         <div class="btns">
@@ -112,8 +120,8 @@
 
       <div class="set">
         <h2 class="sec">Facebook</h2>
-        <p class="hint">Facebook закрыл поиск групп для приложений. Вместо списка групп вы получите готовые ссылки на поиск по каждому запросу.</p>
-        <label class="toggle"><input type="checkbox" id="fbEnabled"> Показывать ссылки на поиск в Facebook</label>
+        <p class="hint">Facebook закрыл поиск групп для приложений, поэтому в бесплатном режиме вы получаете готовые ссылки на поиск по каждому запросу.</p>
+        <label class="toggle"><input type="checkbox" id="fbEnabled"> Искать в Facebook</label>
       </div>
 
       <div class="set">

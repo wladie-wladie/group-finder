@@ -18,6 +18,7 @@ const DEFAULT_SETTINGS = {
   tgEnabled: false,
   tgstatToken: "",
   fbEnabled: true,
+  webSearch: false,
   onlyPostable: true,
   hideForbidden: false,
 };
@@ -30,6 +31,24 @@ export function saveSettings(patch) {
 
 // Groups are identified as "<platform>:<id>", e.g. "vk:123456", "tg:@channel".
 const blocked = load("blocked", {});
+const saved = load("saved", []);  // groups the user added by hand or shared into the app
+
+export const savedList = () => saved.slice();
+export function addSaved(g) {
+  const i = saved.findIndex(x => x.key === g.key);
+  if (i >= 0) return false;
+  saved.unshift(g);
+  save("saved", saved);
+  return true;
+}
+export function updateSaved(key, patch) {
+  const g = saved.find(x => x.key === key);
+  if (g) { Object.assign(g, patch); save("saved", saved); }
+}
+export function removeSaved(key) {
+  const i = saved.findIndex(x => x.key === key);
+  if (i >= 0) { saved.splice(i, 1); save("saved", saved); }
+}
 const posted = load("posted", {});
 
 export const isBlocked = key => !!blocked[key];
@@ -37,6 +56,7 @@ export const blockedList = () => Object.entries(blocked).map(([key, g]) => Objec
 export function block(g) {
   blocked[g.key] = { title: g.title, url: g.url, platform: g.platform, at: Date.now() };
   save("blocked", blocked);
+  removeSaved(g.key);
 }
 export function unblock(key) { delete blocked[key]; save("blocked", blocked); }
 

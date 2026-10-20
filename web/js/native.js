@@ -21,6 +21,13 @@ export async function openUrl(url) {
   window.open(url, "_blank", "noopener");
 }
 
+/* ---------- links shared into the app ("Поделиться" → "Где разместить") ---------- */
+export const shareInSupported = () => !!(isNative() && cap().isPluginAvailable && cap().isPluginAvailable("ShareIn"));
+export function onShared(cb) {
+  if (!shareInSupported()) return;
+  plugin("ShareIn").addListener("shared", d => cb((d && d.text) || "", (d && d.subject) || ""));
+}
+
 /* ---------- clipboard ---------- */
 export async function copyText(text) {
   if (isNative()) {

@@ -1,9 +1,10 @@
 import * as store from "./store.js";
 import { analyzePost, scoreGroups, quickRules, checkKey, MODELS } from "./ai.js";
-import { vkCheck, vkSearch, tgSearch, tgCheck, fbLinks } from "./sources.js";
+import { vkCheck, vkSearch, tgSearch, tgCheck } from "./sources.js";
 import * as vkid from "./vkid.js";
 import { webSearchGroups } from "./websearch.js";
-import { openUrl, copyText, initUpdates, checkForUpdates, applyUpdateNow, appVersion, updateStatus, isNative } from "./native.js";
+import { SEARCH, parseGroupLink, manualGroup, fetchMeta } from "./links.js";
+import { openUrl, copyText, onShared, shareInSupported, initUpdates, checkForUpdates, applyUpdateNow, appVersion, updateStatus, isNative } from "./native.js";
 
 const $ = id => document.getElementById(id);
 const S = store.settings;
@@ -55,7 +56,7 @@ function showTab(name) {
 function renderAiHint() {
   $("aiModeHint").innerHTML = S.claudeKey
     ? "Разбирает Claude. Он поймёт суть услуги и подскажет, где искать аудиторию."
-    : 'Сейчас простой режим: запросы подбираются по словам из поста. Для умного разбора <button class="link" data-goto="settings">добавьте ключ Claude</button>.';
+    : 'Бесплатный режим: запросы подбираются по словам из поста — поправьте их, если нужно. Умный разбор через Claude можно включить в <button class="link" data-goto="settings">настройках</button>.';
 }
 
 function renderAnalysis() {
@@ -75,21 +76,19 @@ function renderAnalysis() {
   renderPlatforms();
 }
 
-// How each network will be searched right now.
+// How each network will be searched right now: "api" / "tgstat" (automatic, free or own paid token),
+// "web" (Claude web search, paid, only when switched on) or "links" (free: ready search links).
 function platformState() {
-  const key = !!S.claudeKey;
+  const web = !!S.claudeKey && !!S.webSearch;
   const vkApi = vkid.isSignedIn() && !S.vkApiBlocked;
   const tgstat = S.tgEnabled && !!S.tgstatToken;
   return {
-    vk: true,
-    vkHow: vkApi ? "api" : key ? "web" : "links",
-    tg: tgstat || key,
-    tgHow: tgstat ? "tgstat" : key ? "web" : "",
-    fb: S.fbEnabled,
-    fbHow: key ? "web" : "links",
+    vk: true, vkHow: vkApi ? "api" : web ? "web" : "links",
+    tg: true, tgHow: tgstat ? "tgstat" : web ? "web" : "links",
+    fb: S.fbEnabled, fbHow: web ? "web" : "links",
   };
 }
-const HOW = { api: "", web: "поиск Claude", links: "ссылки на поиск", tgstat: "TGStat" };
+const HOW = { api: "автоматически", web: "поиск Claude", links: "сами, по ссылкам", tgstat: "TGStat API" };
 function renderPlatforms() {
   const st = platformState();
   const sel = D.platforms || { vk: true, tg: true, fb: true };
@@ -99,9 +98,8 @@ function renderPlatforms() {
   };
   $("platforms").innerHTML =
     item("vk", HOW[st.vkHow]) +
-    item("tg", st.tg ? HOW[st.tgHow] : "нужен ключ Claude или TGStat") +
-    item("fb", st.fb ? HOW[st.fbHow] : "выкл.") +
-    (!S.claudeKey ? '<p class="hint" style="width:100%">Без ключа Claude вместо групп будут только ссылки на поиск. <button class="link" data-goto="settings">Добавить ключ</button></p>' : "");
+    item("tg", HOW[st.tgHow]) +
+    item("fb", st.fb ? HOW[st.fbHow] : "выкл.");
 }
 
 async function onAnalyze() {
@@ -139,15 +137,15 @@ async function onSearch() {
   document.querySelectorAll("[data-plat]").forEach(c => { sel[c.dataset.plat] = c.checked; });
   store.saveDraft({ platforms: sel });
   const use = { vk: sel.vk && st.vk, tg: sel.tg && st.tg, fb: sel.fb && st.fb };
-  if (!use.vk && !use.tg && !use.fb) { toast("Выберите хотя бы одну площадку. ВКонтакте подключается в настройках."); return; }
+  if (!use.vk && !use.tg && !use.fb) { toast("Выберите хотя бы одну площадку."); return; }
 
   ui.busy = true; ui.errors = []; ui.shown = PAGE;
   $("searchBtn").disabled = true;
   showTab("groups");
   $("results").innerHTML = "";
-  $("filters").innerHTML = "";
   renderErrors();
   let found = [];
+  const manual = { vk: false, tg: false, fb: false }; // networks to search by hand
   const qs = D.queries;
   try {
     const web = async (platform, from, to) => {
@@ -164,51 +162,86 @@ async function onSearch() {
           found = found.concat(vk.filter(g => !g.closed));
         } catch (e) {
           if (/profile type|тип профиля/i.test(e.message)) {
-            // VK gives group search only to verified business apps; until then search via Claude.
+            // VK gives group search only to verified business apps.
             store.saveSettings({ vkApiBlocked: true });
-            how = S.claudeKey ? "web" : "links";
-            if (how === "links") ui.errors.push("ВКонтакте пока не даёт этому приложению искать группы: поиск открыт только для приложений с подтверждённым бизнес-аккаунтом VK ID. Добавьте ключ Claude, и группы ВК будут искаться через веб-поиск.");
-          } else { ui.errors.push(e.message); }
-          renderErrors();
+            how = S.claudeKey && S.webSearch ? "web" : "links";
+          } else { ui.errors.push(e.message); renderErrors(); how = "links"; }
         }
       }
       if (how === "web") {
-        try { found = found.concat(await web("vk", 0.05, 0.4)); } catch (e) { ui.errors.push("ВКонтакте: " + e.message); renderErrors(); }
+        try { found = found.concat(await web("vk", 0.05, 0.4)); } catch (e) { ui.errors.push("ВКонтакте: " + e.message); renderErrors(); manual.vk = true; }
       }
-      if (how === "links") found = found.concat(searchLinks("vk", qs));
+      if (how === "links") manual.vk = true;
     }
     if (use.tg) {
       if (st.tgHow === "tgstat") {
         try {
           const tg = await tgSearch(qs, S.tgstatToken, (i, n) => setProgress("Telegram: запрос " + i + " из " + n, 0.5 + i / n * 0.2));
           found = found.concat(tg);
-        } catch (e) { ui.errors.push(e.message); renderErrors(); }
-      } else {
-        try { found = found.concat(await web("tg", 0.4, 0.6)); } catch (e) { ui.errors.push("Telegram: " + e.message); renderErrors(); }
-      }
+        } catch (e) { ui.errors.push(e.message); renderErrors(); manual.tg = true; }
+      } else if (st.tgHow === "web") {
+        try { found = found.concat(await web("tg", 0.4, 0.6)); } catch (e) { ui.errors.push("Telegram: " + e.message); renderErrors(); manual.tg = true; }
+      } else manual.tg = true;
     }
-    if (use.fb && st.fbHow === "web") {
-      try { found = found.concat(await web("fb", 0.6, 0.78)); } catch (e) { ui.errors.push("Facebook: " + e.message); renderErrors(); }
+    if (use.fb) {
+      if (st.fbHow === "web") {
+        try { found = found.concat(await web("fb", 0.6, 0.78)); } catch (e) { ui.errors.push("Facebook: " + e.message); renderErrors(); manual.fb = true; }
+      } else manual.fb = true;
     }
     found = found.filter(g => !store.isBlocked(g.key));
-    found.filter(g => !g.isSearch).forEach(quickRules);
-    if (S.claudeKey && found.some(g => !g.isSearch)) {
+    found.forEach(quickRules);
+    if (S.claudeKey && found.length) {
       setProgress("Claude оценивает группы и читает правила…", 0.82);
       try {
         await scoreGroups({
           key: S.claudeKey, model: S.model,
           summary: D.analysis && D.analysis.summary, text: D.text,
-          groups: found.filter(g => !g.isSearch),
+          groups: found,
           onProgress: (i, n) => setProgress("Claude оценил " + i + " из " + n + " групп", 0.82 + i / n * 0.18),
         });
       } catch (e) { ui.errors.push("Оценка групп не удалась: " + e.message + " Список показан без оценки."); renderErrors(); }
     }
-    if (use.fb && st.fbHow === "links") found = found.concat(fbLinks(qs).filter(g => !store.isBlocked(g.key)));
-    store.saveDraft({ results: found, searchedAt: Date.now() });
+    const anyManual = manual.vk || manual.tg || manual.fb;
+    store.saveDraft({ results: found, searchedAt: Date.now(), manual: anyManual ? { queries: qs.slice(), nets: manual } : null });
   } finally {
     ui.busy = false;
     $("searchBtn").disabled = false;
     setProgress(null);
+    renderResults();
+  }
+}
+
+/* ---------- free mode: search by hand ---------- */
+function renderSearchBox() {
+  const m = D.manual;
+  if (!m || !m.queries || !m.queries.length) { $("searchBox").innerHTML = ""; return; }
+  const nets = ["vk", "tg", "fb"].filter(k => m.nets[k]);
+  const why = m.nets.vk && S.vkApiBlocked
+    ? "ВКонтакте даёт приложениям искать группы только после подтверждения бизнес-аккаунта VK ID, поэтому группы ВК ищем вручную. "
+    : "";
+  $("searchBox").innerHTML = '<div class="manual">' +
+    '<h2 class="sec">Поиск по вашим запросам</h2>' +
+    '<p class="hint">' + why + "Нажмите на площадку — откроется поиск. Подходящую группу отправьте сюда через «Поделиться» → «Где разместить» или вставьте ссылку ниже.</p>" +
+    m.queries.map((q, i) => '<div class="srow"><span class="sq">' + esc(q) + "</span>" +
+      nets.map(k => '<button class="sbtn ' + k + '" data-sq="' + i + '" data-sn="' + k + '">' + SEARCH[k].label + "</button>").join("") +
+      "</div>").join("") +
+    "</div>";
+}
+
+async function addGroupFromText(text, subject) {
+  const link = parseGroupLink(text + " " + (subject || ""));
+  if (!link) { toast("Не нашёл ссылку на группу ВК, канал Telegram или группу Facebook."); return; }
+  const titleHint = String(text).replace(link.url, "").trim() || subject;
+  const g = manualGroup(link, titleHint);
+  if (store.isBlocked(g.key)) { store.unblock(g.key); }
+  const added = store.addSaved(g);
+  if (ui.tab !== "groups") showTab("groups"); else renderResults();
+  toast(added ? "Добавлено в список" : "Эта группа уже в списке");
+  if (!added) return;
+  const before = JSON.stringify([g.title, g.members, g.description]);
+  await fetchMeta(g);
+  if (JSON.stringify([g.title, g.members, g.description]) !== before) {
+    store.updateSaved(g.key, { title: g.title, members: g.members, description: g.description, tgType: g.tgType });
     renderResults();
   }
 }
@@ -223,21 +256,28 @@ function sortScore(g) {
   const can = g.canPost ? 8 : g.canSuggest ? 4 : 0;
   const ads = g.ads === "forbidden" ? -25 : g.ads === "allowed" ? 6 : 0;
   const size = g.members ? Math.log10(g.members + 1) * 3 : 0;
-  const search = g.isSearch ? -1000 : 0; // Facebook search links go to the end
-  return posted + rel + can + ads + size + search;
+  const mine = g.manual ? 60 : 0; // groups the user picked go first
+  return posted + rel + can + ads + size + mine;
+}
+
+// Groups added by hand stay on top and survive new searches.
+function allGroups() {
+  const seen = new Set();
+  return store.savedList().concat((D.results || []).filter(g => !g.isSearch))
+    .filter(g => { if (seen.has(g.key)) return false; seen.add(g.key); return true; });
 }
 
 function visibleResults() {
-  return (D.results || [])
+  return allGroups()
     .filter(g => !store.isBlocked(g.key))
     .filter(g => ui.platform === "all" || g.platform === ui.platform)
-    .filter(g => !ui.onlyPostable || g.isSearch || g.viaWeb || g.canPost || g.canSuggest || g.platform === "tg")
+    .filter(g => !ui.onlyPostable || g.manual || g.viaWeb || g.canPost || g.canSuggest || g.platform === "tg")
     .filter(g => !ui.hideForbidden || g.ads !== "forbidden")
     .sort((a, b) => sortScore(b) - sortScore(a));
 }
 
 function renderFilters() {
-  const all = (D.results || []).filter(g => !store.isBlocked(g.key));
+  const all = allGroups().filter(g => !store.isBlocked(g.key));
   if (!all.length) { $("filters").innerHTML = ""; return; }
   const counts = { all: all.length };
   all.forEach(g => { counts[g.platform] = (counts[g.platform] || 0) + 1; });
@@ -252,13 +292,14 @@ function renderFilters() {
 function tagsFor(g) {
   const t = [];
   if (g.rel != null) t.push('<span class="tag rel">Подходит на ' + g.rel + "/10</span>");
-  if (g.viaWeb) t.push('<span class="tag">Найдено поиском: правила проверьте в группе</span>');
+  if (g.manual) t.push('<span class="tag ok">Вы добавили</span>');
+  else if (g.viaWeb) t.push('<span class="tag">Найдено поиском: правила проверьте в группе</span>');
   else if (g.platform === "vk") {
     if (g.canPost) t.push('<span class="tag ok">Можно опубликовать</span>');
     else if (g.canSuggest) t.push('<span class="tag warn">Через «Предложить новость»</span>');
     else t.push('<span class="tag">Стена закрыта</span>');
   }
-  if (g.platform === "tg" && !g.viaWeb) t.push(g.tgType === "chat" ? '<span class="tag ok">Чат: можно писать</span>' : '<span class="tag warn">Канал: только через админа</span>');
+  if (g.platform === "tg" && !g.viaWeb && !(g.manual && !g.tgType)) t.push(g.tgType === "chat" ? '<span class="tag ok">Чат: можно писать</span>' : '<span class="tag warn">Канал: только через админа</span>');
   if (g.ads === "forbidden") t.push('<span class="tag bad">Реклама запрещена</span>');
   else if (g.ads === "paid") t.push('<span class="tag warn">Реклама платно</span>');
   else if (g.ads === "allowed") t.push('<span class="tag ok">Объявления разрешены</span>');
@@ -277,49 +318,43 @@ function groupCard(g) {
     '<div class="tags">' + tagsFor(g) + "</div>" +
     (g.note ? '<p class="g-note">' + esc(g.note) + "</p>" : "") +
     '<div class="g-acts">' +
-      '<button class="a-open" data-act="open">' + (g.isSearch ? "Искать" : "Открыть") + "</button>" +
-      (g.isSearch ? "" : '<button class="a-done" data-act="done">' + (done ? "Ещё раз" : "Опубликовал") + "</button>") +
+      '<button class="a-open" data-act="open">Открыть</button>' +
+      '<button class="a-done" data-act="done">' + (done ? "Ещё раз" : "Опубликовал") + "</button>" +
       '<button class="a-block" data-act="block">В блок</button>' +
     "</div></article>";
 }
 
 function renderResults() {
+  renderSearchBox();
   renderFilters();
-  const n = (D.results || []).filter(g => !store.isBlocked(g.key) && !g.isSearch).length;
+  $("shareHint").textContent = shareInSupported()
+    ? "Или в приложении ВК, Telegram или в браузере нажмите «Поделиться» → «Где разместить»."
+    : isNative() ? "Чтобы отправлять группы сюда через «Поделиться», установите новую версию APK." : "";
+  const n = allGroups().filter(g => !store.isBlocked(g.key)).length;
   $("groupsCount").textContent = n ? (n > 99 ? "99+" : String(n)) : "";
   if (ui.busy) return;
   const list = visibleResults();
-  if (!(D.results || []).length) {
-    $("results").innerHTML = '<div class="empty"><b>Здесь появятся группы</b>Напишите пост, разберите его и нажмите «Найти группы».<br><br><button class="ghost" data-goto="post">К посту</button></div>';
+  if (!allGroups().length) {
+    $("results").innerHTML = D.manual
+      ? '<div class="empty"><b>Список пока пуст</b>Найдите группы по ссылкам выше и добавьте их сюда.</div>'
+      : '<div class="empty"><b>Здесь появятся группы</b>Напишите пост, разберите его и нажмите «Найти группы».<br><br><button class="ghost" data-goto="post">К посту</button></div>';
     return;
   }
   if (!list.length) {
     $("results").innerHTML = '<div class="empty"><b>Под эти фильтры ничего нет</b>Снимите фильтр «Можно опубликовать» или выберите другую площадку.</div>';
     return;
   }
-  $("results").innerHTML = list.slice(0, ui.shown).map(groupCard).join("") +
+  $("results").innerHTML = '<h2 class="sec">Группы</h2>' + list.slice(0, ui.shown).map(groupCard).join("") +
     (list.length > ui.shown ? '<button class="ghost more" data-more>Показать ещё ' + Math.min(PAGE, list.length - ui.shown) + " из " + (list.length - ui.shown) + "</button>" : "");
 }
 
-function searchLinks(platform, qs) {
-  return qs.map(q => ({
-    key: platform + "-search:" + q.toLowerCase(),
-    platform,
-    title: "Сообщества ВКонтакте: «" + q + "»",
-    url: "https://vk.com/search/communities?q=" + encodeURIComponent(q),
-    members: 0,
-    description: "Готовый поиск во ВКонтакте. Откройте и выберите открытые группы.",
-    isSearch: true, canPost: false, canSuggest: false, closed: false, queries: [q],
-  })).filter(g => !store.isBlocked(g.key));
-}
-
-const findResult = key => (D.results || []).find(g => g.key === key);
+const findResult = key => allGroups().find(g => g.key === key);
 
 async function onCardAction(act, key) {
   const g = findResult(key);
   if (!g) return;
   if (act === "open") {
-    if (!g.isSearch && D.text) {
+    if (D.text) {
       const ok = await copyText(D.text);
       if (ok) toast("Текст поста скопирован. Вставьте его в группе.");
     }
@@ -367,7 +402,8 @@ function renderSettings() {
   $("tgEnabled").checked = S.tgEnabled;
   $("tgstatToken").value = S.tgstatToken;
   $("fbEnabled").checked = S.fbEnabled;
-  if (!$("claudeStatus").textContent) setStatus("claudeStatus", S.claudeKey ? "Ключ сохранён." : "Ключ не добавлен — работает простой режим.", S.claudeKey ? "ok" : "");
+  $("webSearch").checked = !!(S.webSearch && S.claudeKey);
+  if (!$("claudeStatus").textContent) setStatus("claudeStatus", S.claudeKey ? "Ключ сохранён." : "Ключ не добавлен — всё работает бесплатно.", S.claudeKey ? "ok" : "");
   renderVk();
   if (!$("tgStatus").textContent) setStatus("tgStatus", S.tgEnabled ? (S.tgstatToken ? "Включено." : "Добавьте токен TGStat.") : "Выключено.", S.tgEnabled && S.tgstatToken ? "ok" : "");
   $("versionLine").textContent = "Версия " + appVersion() + (isNative() ? ". Приложение обновляется само: новая версия скачивается при запуске и включается после перезапуска." : ". Это браузерная версия, обновления приходят только в APK.");
@@ -390,7 +426,7 @@ function renderUpdateStatus() {
 async function saveClaude() {
   const key = $("claudeKey").value.trim();
   store.saveSettings({ model: $("model").value });
-  if (!key) { store.saveSettings({ claudeKey: "" }); setStatus("claudeStatus", "Ключ удалён — работает простой режим."); renderAiHint(); return; }
+  if (!key) { store.saveSettings({ claudeKey: "", webSearch: false }); $("webSearch").checked = false; setStatus("claudeStatus", "Ключ удалён — всё работает бесплатно."); renderAiHint(); if (D.analysis) renderPlatforms(); return; }
   setStatus("claudeStatus", "Проверяю ключ…");
   try {
     await checkKey(key);
@@ -403,8 +439,8 @@ async function saveClaude() {
 function renderVk(msg, kind) {
   const inn = vkid.isSignedIn();
   if (msg) setStatus("vkStatus", msg, kind);
-  else if (inn && S.vkApiBlocked) setStatus("vkStatus", "Вы вошли" + (vkid.signedInName() ? " как " + vkid.signedInName() : "") + ", но ВК пока не даёт приложению искать группы: это открывается после подтверждения бизнес-аккаунта VK ID. Сейчас группы ВК ищутся через Claude.", "");
-  else setStatus("vkStatus", inn ? "Вы вошли" + (vkid.signedInName() ? " как " + vkid.signedInName() : "") + "." : "Не обязательно: с ключом Claude группы ВК ищутся и без входа.", inn ? "ok" : "");
+  else if (inn && S.vkApiBlocked) setStatus("vkStatus", "Вы вошли" + (vkid.signedInName() ? " как " + vkid.signedInName() : "") + ", но ВК пока не даёт приложению искать группы: это открывается после подтверждения бизнес-аккаунта VK ID. Пока группы ВК ищутся по ссылкам" + (S.claudeKey && S.webSearch ? " или через Claude" : "") + ".", "");
+  else setStatus("vkStatus", inn ? "Вы вошли" + (vkid.signedInName() ? " как " + vkid.signedInName() : "") + "." : "Не обязательно. Вход нужен, чтобы приложение само искало группы ВК; без него вы ищете по готовым ссылкам.", inn ? "ok" : "");
   $("vkLogin").hidden = inn;
   $("logoutVk").hidden = !inn;
   const old = isNative() && !vkid.signInSupported();
@@ -464,6 +500,7 @@ function wire() {
     const t = e.target.closest("button, [data-expand]");
     if (!t) return;
     if (t.dataset.goto) { showTab(t.dataset.goto); return; }
+    if (t.dataset.sn) { const q = (D.manual && D.manual.queries[+t.dataset.sq]) || ""; openUrl(SEARCH[t.dataset.sn].url(q)); return; }
     if (t.dataset.open) { openUrl(t.dataset.open); return; }
     if (t.dataset.rmq != null) { const q = D.queries.slice(); q.splice(+t.dataset.rmq, 1); store.saveDraft({ queries: q }); renderAnalysis(); return; }
     if (t.dataset.pf) { ui.platform = t.dataset.pf; ui.shown = PAGE; renderResults(); return; }
@@ -478,6 +515,19 @@ function wire() {
     if (t.dataset.unblock) { store.unblock(t.dataset.unblock); renderHistory(); toast("Группа снова будет попадаться в поиске."); return; }
   });
 
+  $("addLinkForm").addEventListener("submit", e => {
+    e.preventDefault();
+    const v = $("newLink").value.trim();
+    if (!v) return;
+    $("newLink").value = "";
+    addGroupFromText(v, "");
+  });
+  $("webSearch").addEventListener("change", () => {
+    if ($("webSearch").checked && !S.claudeKey) { $("webSearch").checked = false; setStatus("claudeStatus", "Сначала добавьте ключ Claude.", "bad"); return; }
+    store.saveSettings({ webSearch: $("webSearch").checked });
+    if (D.analysis) renderPlatforms();
+  });
+  onShared((text, subject) => addGroupFromText(text, subject));
   $("saveClaude").addEventListener("click", saveClaude);
   $("model").addEventListener("change", () => store.saveSettings({ model: $("model").value }));
   $("getClaudeKey").addEventListener("click", () => openUrl("https://console.anthropic.com/settings/keys"));
