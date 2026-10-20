@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "description": "Где разместить — подбор тематических групп ВК, Telegram и Facebook под ваш пост",
   "scripts": {
-    "build:web": "node scripts/build-web.mjs",
+    "build:web": "node scripts/build-web.mjs && node scripts/build-tg.mjs",
     "sync": "npm run build:web && npx cap sync android"
   },
   "dependencies": {
@@ -14,9 +14,17 @@
     "@capacitor/browser": "8.0.5",
     "@capacitor/clipboard": "8.0.1",
     "@capacitor/core": "8.5.2",
-    "@capgo/capacitor-updater": "8.52.1"
+    "@capgo/capacitor-updater": "8.52.1",
+    "@capgo/inappbrowser": "8.6.14",
+    "telegram": "2.26.22"
   },
   "devDependencies": {
-    "@capacitor/cli": "8.5.2"
+    "@capacitor/cli": "8.5.2",
+    "buffer": "6.0.3",
+    "esbuild": "0.25.11",
+    "events": "3.3.0",
+    "path-browserify": "1.0.1",
+    "process": "0.11.10",
+    "util": "0.12.5"
   }
 }

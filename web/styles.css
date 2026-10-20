@@ -270,3 +270,7 @@ button { cursor: pointer; border: 0; background: none; }
 .add-link input { flex: 1; min-width: 0; }
 #shareHint { margin: 6px 0 4px; }
 #results > .sec { margin-top: 18px; }
+
+.collect { background: var(--card); border-radius: var(--radius); border-left: 5px solid var(--vk); padding: 14px 14px 12px; margin-bottom: 12px; }
+.collect b { font-size: 16px; }
+.collect .wide { margin-top: 8px; }

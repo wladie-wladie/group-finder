@@ -106,6 +106,31 @@
       </div>
 
       <div class="set">
+        <h2 class="sec">Telegram</h2>
+        <p class="hint">Войдите своим аккаунтом Telegram — приложение само найдёт открытые чаты и каналы по вашим запросам через глобальный поиск Telegram. Бесплатно. Приложение только ищет: ничего не пишет и не публикует от вашего имени.</p>
+        <p id="tgAccStatus" class="status"></p>
+        <div id="tgLoginForm">
+          <div id="tgPhoneStep">
+            <label class="field-label" for="tgPhone">Номер телефона</label>
+            <input id="tgPhone" type="tel" autocomplete="tel" placeholder="+995 5xx xxx xxx">
+            <button id="tgSendCode" class="primary wide">Получить код</button>
+          </div>
+          <div id="tgCodeStep" hidden>
+            <label class="field-label" for="tgCode">Код из Telegram</label>
+            <input id="tgCode" inputmode="numeric" autocomplete="one-time-code" placeholder="12345">
+            <button id="tgSubmitCode" class="primary wide">Войти</button>
+          </div>
+          <div id="tgPassStep" hidden>
+            <label class="field-label" for="tgPass">Облачный пароль Telegram</label>
+            <input id="tgPass" type="password" autocomplete="current-password">
+            <p id="tgPassHint" class="hint"></p>
+            <button id="tgSubmitPass" class="primary wide">Войти</button>
+          </div>
+        </div>
+        <button id="tgLogout" class="ghost" hidden>Выйти из Telegram</button>
+      </div>
+
+      <div class="set">
         <h2 class="sec">Telegram через TGStat API — платно</h2>
         <p class="hint">Бесплатно Telegram-каналы и чаты ищутся по ссылкам на сайт TGStat. Если у вас есть платный тариф TGStat API, приложение будет само собирать список с числом подписчиков. В чатах участники обычно могут писать сами, в каналах публикует только админ.</p>
         <label class="toggle"><input type="checkbox" id="tgEnabled"> Искать через TGStat API</label>

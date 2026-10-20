@@ -4,6 +4,8 @@ import { vkCheck, vkSearch, tgSearch, tgCheck } from "./sources.js";
 import * as vkid from "./vkid.js";
 import { webSearchGroups } from "./websearch.js";
 import { SEARCH, parseGroupLink, manualGroup, fetchMeta } from "./links.js";
+import * as tg from "./tg.js";
+import { collectVk, collectorSupported } from "./vkbrowser.js";
 import { openUrl, copyText, onShared, shareInSupported, initUpdates, checkForUpdates, applyUpdateNow, appVersion, updateStatus, isNative } from "./native.js";
 
 const $ = id => document.getElementById(id);
@@ -83,12 +85,12 @@ function platformState() {
   const vkApi = vkid.isSignedIn() && !S.vkApiBlocked;
   const tgstat = S.tgEnabled && !!S.tgstatToken;
   return {
-    vk: true, vkHow: vkApi ? "api" : web ? "web" : "links",
-    tg: true, tgHow: tgstat ? "tgstat" : web ? "web" : "links",
+    vk: true, vkHow: vkApi ? "api" : web ? "web" : collectorSupported() ? "browser" : "links",
+    tg: true, tgHow: tgstat ? "tgstat" : tg.isSignedIn() ? "tgacc" : web ? "web" : "links",
     fb: S.fbEnabled, fbHow: web ? "web" : "links",
   };
 }
-const HOW = { api: "автоматически", web: "поиск Claude", links: "сами, по ссылкам", tgstat: "TGStat API" };
+const HOW = { api: "автоматически", web: "поиск Claude", links: "сами, по ссылкам", tgstat: "TGStat API", tgacc: "автоматически", browser: "сбор в приложении" };
 function renderPlatforms() {
   const st = platformState();
   const sel = D.platforms || { vk: true, tg: true, fb: true };
@@ -145,7 +147,7 @@ async function onSearch() {
   $("results").innerHTML = "";
   renderErrors();
   let found = [];
-  const manual = { vk: false, tg: false, fb: false }; // networks to search by hand
+  const manual = { vk: false, tg: false, fb: false, vkCollect: false }; // networks to search by hand
   const qs = D.queries;
   try {
     const web = async (platform, from, to) => {
@@ -164,13 +166,14 @@ async function onSearch() {
           if (/profile type|тип профиля/i.test(e.message)) {
             // VK gives group search only to verified business apps.
             store.saveSettings({ vkApiBlocked: true });
-            how = S.claudeKey && S.webSearch ? "web" : "links";
-          } else { ui.errors.push(e.message); renderErrors(); how = "links"; }
+            how = S.claudeKey && S.webSearch ? "web" : collectorSupported() ? "browser" : "links";
+          } else { ui.errors.push(e.message); renderErrors(); how = collectorSupported() ? "browser" : "links"; }
         }
       }
       if (how === "web") {
         try { found = found.concat(await web("vk", 0.05, 0.4)); } catch (e) { ui.errors.push("ВКонтакте: " + e.message); renderErrors(); manual.vk = true; }
       }
+      if (how === "browser") manual.vkCollect = true;
       if (how === "links") manual.vk = true;
     }
     if (use.tg) {
@@ -178,6 +181,11 @@ async function onSearch() {
         try {
           const tg = await tgSearch(qs, S.tgstatToken, (i, n) => setProgress("Telegram: запрос " + i + " из " + n, 0.5 + i / n * 0.2));
           found = found.concat(tg);
+        } catch (e) { ui.errors.push(e.message); renderErrors(); manual.tg = true; }
+      } else if (st.tgHow === "tgacc") {
+        try {
+          const list = await tg.tgAccountSearch(qs, (i, n) => setProgress("Telegram: запрос " + i + " из " + n, 0.5 + i / n * 0.3));
+          found = found.concat(list);
         } catch (e) { ui.errors.push(e.message); renderErrors(); manual.tg = true; }
       } else if (st.tgHow === "web") {
         try { found = found.concat(await web("tg", 0.4, 0.6)); } catch (e) { ui.errors.push("Telegram: " + e.message); renderErrors(); manual.tg = true; }
@@ -201,7 +209,7 @@ async function onSearch() {
         });
       } catch (e) { ui.errors.push("Оценка групп не удалась: " + e.message + " Список показан без оценки."); renderErrors(); }
     }
-    const anyManual = manual.vk || manual.tg || manual.fb;
+    const anyManual = manual.vk || manual.tg || manual.fb || manual.vkCollect;
     store.saveDraft({ results: found, searchedAt: Date.now(), manual: anyManual ? { queries: qs.slice(), nets: manual } : null });
   } finally {
     ui.busy = false;
@@ -215,17 +223,49 @@ async function onSearch() {
 function renderSearchBox() {
   const m = D.manual;
   if (!m || !m.queries || !m.queries.length) { $("searchBox").innerHTML = ""; return; }
+  let html = "";
+  if (m.nets.vkCollect) {
+    html += '<div class="collect">' +
+      "<b>ВКонтакте: соберите группы одним проходом</b>" +
+      '<p class="hint">Откроется поиск сообществ ВК внутри приложения — по очереди по всем ' + m.queries.length + " запросам. Приложение само заберёт найденные группы с числом участников. Листайте страницу, чтобы собрать больше, и жмите «Следующий запрос». В первый раз ВК попросит войти.</p>" +
+      '<button class="primary wide" data-collect>' + (m.vkCollected ? "Собрать ещё раз" : "Собрать группы ВКонтакте") + "</button>" +
+      (m.vkCollected ? '<p class="status ok">Собрано из ВК: ' + m.vkCollected + "</p>" : "") +
+      "</div>";
+  }
   const nets = ["vk", "tg", "fb"].filter(k => m.nets[k]);
-  const why = m.nets.vk && S.vkApiBlocked
-    ? "ВКонтакте даёт приложениям искать группы только после подтверждения бизнес-аккаунта VK ID, поэтому группы ВК ищем вручную. "
-    : "";
-  $("searchBox").innerHTML = '<div class="manual">' +
-    '<h2 class="sec">Поиск по вашим запросам</h2>' +
-    '<p class="hint">' + why + "Нажмите на площадку — откроется поиск. Подходящую группу отправьте сюда через «Поделиться» → «Где разместить» или вставьте ссылку ниже.</p>" +
-    m.queries.map((q, i) => '<div class="srow"><span class="sq">' + esc(q) + "</span>" +
-      nets.map(k => '<button class="sbtn ' + k + '" data-sq="' + i + '" data-sn="' + k + '">' + SEARCH[k].label + "</button>").join("") +
-      "</div>").join("") +
-    "</div>";
+  if (nets.length) {
+    const tgTip = m.nets.tg ? ' Telegram приложение может искать само — <button class="link" data-goto="settings">войдите в Telegram</button>.' : "";
+    html += '<div class="manual">' +
+      '<h2 class="sec">Поиск по ссылкам</h2>' +
+      '<p class="hint">Нажмите на площадку — откроется поиск. Подходящую группу отправьте сюда через «Поделиться» → «Где разместить» или вставьте ссылку ниже.' + tgTip + "</p>" +
+      m.queries.map((q, i) => '<div class="srow"><span class="sq">' + esc(q) + "</span>" +
+        nets.map(k => '<button class="sbtn ' + k + '" data-sq="' + i + '" data-sn="' + k + '">' + SEARCH[k].label + "</button>").join("") +
+        "</div>").join("") +
+      "</div>";
+  }
+  $("searchBox").innerHTML = html;
+}
+
+async function onCollectVk() {
+  const m = D.manual;
+  if (!m) return;
+  try {
+    const groups = await collectVk(m.queries, n => { $("groupsCount").textContent = String(n); });
+    const fresh = groups.filter(g => !store.isBlocked(g.key));
+    fresh.forEach(quickRules);
+    const have = new Set((D.results || []).map(g => g.key));
+    const add = fresh.filter(g => !have.has(g.key));
+    store.saveDraft({ results: add.concat(D.results || []), manual: Object.assign({}, m, { vkCollected: (m.vkCollected || 0) + add.length }) });
+    renderResults();
+    toast(add.length ? "Добавлено групп ВК: " + add.length : "Новых групп не нашлось. Попробуйте другие запросы или пролистайте поиск ниже.");
+    if (add.length && S.claudeKey) {
+      try {
+        await scoreGroups({ key: S.claudeKey, model: S.model, summary: D.analysis && D.analysis.summary, text: D.text, groups: add });
+        store.saveDraft({ results: D.results });
+        renderResults();
+      } catch (_) {}
+    }
+  } catch (e) { toast(e.message || String(e)); }
 }
 
 async function addGroupFromText(text, subject) {
@@ -271,7 +311,7 @@ function visibleResults() {
   return allGroups()
     .filter(g => !store.isBlocked(g.key))
     .filter(g => ui.platform === "all" || g.platform === ui.platform)
-    .filter(g => !ui.onlyPostable || g.manual || g.viaWeb || g.canPost || g.canSuggest || g.platform === "tg")
+    .filter(g => !ui.onlyPostable || g.manual || g.viaWeb || g.viaBrowser || g.canPost || g.canSuggest || g.platform === "tg")
     .filter(g => !ui.hideForbidden || g.ads !== "forbidden")
     .sort((a, b) => sortScore(b) - sortScore(a));
 }
@@ -293,6 +333,7 @@ function tagsFor(g) {
   const t = [];
   if (g.rel != null) t.push('<span class="tag rel">Подходит на ' + g.rel + "/10</span>");
   if (g.manual) t.push('<span class="tag ok">Вы добавили</span>');
+  else if (g.viaBrowser) t.push('<span class="tag">Из поиска ВК: правила проверьте в группе</span>');
   else if (g.viaWeb) t.push('<span class="tag">Найдено поиском: правила проверьте в группе</span>');
   else if (g.platform === "vk") {
     if (g.canPost) t.push('<span class="tag ok">Можно опубликовать</span>');
@@ -405,6 +446,7 @@ function renderSettings() {
   $("webSearch").checked = !!(S.webSearch && S.claudeKey);
   if (!$("claudeStatus").textContent) setStatus("claudeStatus", S.claudeKey ? "Ключ сохранён." : "Ключ не добавлен — всё работает бесплатно.", S.claudeKey ? "ok" : "");
   renderVk();
+  renderTgAcc();
   if (!$("tgStatus").textContent) setStatus("tgStatus", S.tgEnabled ? (S.tgstatToken ? "Включено." : "Добавьте токен TGStat.") : "Выключено.", S.tgEnabled && S.tgstatToken ? "ok" : "");
   $("versionLine").textContent = "Версия " + appVersion() + (isNative() ? ". Приложение обновляется само: новая версия скачивается при запуске и включается после перезапуска." : ". Это браузерная версия, обновления приходят только в APK.");
   renderUpdateStatus();
@@ -462,6 +504,66 @@ async function onVkLogin() {
   if (D.analysis) renderPlatforms();
 }
 
+/* ---------- Telegram account ---------- */
+const tgLogin = { pending: null }; // resolves the code / password the user types
+
+function tgStep(step) {
+  $("tgPhoneStep").hidden = step !== "phone";
+  $("tgCodeStep").hidden = step !== "code";
+  $("tgPassStep").hidden = step !== "pass";
+}
+
+function renderTgAcc(msg, kind) {
+  const inn = tg.isSignedIn();
+  $("tgLoginForm").hidden = inn || !tg.tgConfigured();
+  $("tgLogout").hidden = !inn;
+  if (msg) setStatus("tgAccStatus", msg, kind);
+  else if (!tg.tgConfigured()) setStatus("tgAccStatus", "Вход в Telegram появится в ближайшем обновлении.");
+  else if (inn) setStatus("tgAccStatus", "Вы вошли" + (tg.signedInName() ? " как " + tg.signedInName() : "") + ". Чаты и каналы ищутся автоматически.", "ok");
+  else if (!tgLogin.pending) { setStatus("tgAccStatus", "Не подключено."); tgStep("phone"); }
+}
+
+function waitFor(step) {
+  tgStep(step);
+  return new Promise(resolve => { tgLogin.pending = resolve; });
+}
+
+async function onTgSendCode() {
+  const phone = $("tgPhone").value.replace(/[^\d+]/g, "");
+  if (phone.replace(/\D/g, "").length < 9) { renderTgAcc("Введите номер с кодом страны, например +995 5xx xxx xxx.", "bad"); return; }
+  $("tgSendCode").disabled = true;
+  setStatus("tgAccStatus", "Подключаюсь к Telegram…");
+  let asked = false;
+  try {
+    const name = await tg.signIn({
+      phone,
+      askCode: () => {
+        if (!asked) setStatus("tgAccStatus", "Код отправлен в Telegram. Введите его ниже.");
+        asked = true;
+        $("tgCode").value = "";
+        return waitFor("code");
+      },
+      askPassword: hint => { $("tgPassHint").textContent = hint ? "Подсказка: " + hint : ""; setStatus("tgAccStatus", "У вас включён облачный пароль. Введите его."); $("tgPass").value = ""; return waitFor("pass"); },
+      onError: msg => setStatus("tgAccStatus", msg, "bad"),
+    });
+    tgLogin.pending = null;
+    renderTgAcc("Вы вошли" + (name ? " как " + name : "") + ". Чаты и каналы ищутся автоматически.", "ok");
+    if (D.analysis) renderPlatforms();
+  } catch (e) {
+    tgLogin.pending = null;
+    tgStep("phone");
+    renderTgAcc(e.message || String(e), "bad");
+  } finally { $("tgSendCode").disabled = false; }
+}
+
+function submitTgAnswer(inputId) {
+  const v = $(inputId).value.trim();
+  if (!v || !tgLogin.pending) return;
+  const r = tgLogin.pending; tgLogin.pending = null;
+  setStatus("tgAccStatus", "Проверяю…");
+  r(v);
+}
+
 async function saveTg() {
   const enabled = $("tgEnabled").checked;
   const token = $("tgstatToken").value.trim();
@@ -500,6 +602,7 @@ function wire() {
     const t = e.target.closest("button, [data-expand]");
     if (!t) return;
     if (t.dataset.goto) { showTab(t.dataset.goto); return; }
+    if (t.hasAttribute("data-collect")) { onCollectVk(); return; }
     if (t.dataset.sn) { const q = (D.manual && D.manual.queries[+t.dataset.sq]) || ""; openUrl(SEARCH[t.dataset.sn].url(q)); return; }
     if (t.dataset.open) { openUrl(t.dataset.open); return; }
     if (t.dataset.rmq != null) { const q = D.queries.slice(); q.splice(+t.dataset.rmq, 1); store.saveDraft({ queries: q }); renderAnalysis(); return; }
@@ -534,6 +637,10 @@ function wire() {
   $("vkLogin").addEventListener("click", onVkLogin);
   $("logoutVk").addEventListener("click", () => { vkid.signOut(); renderVk("Вы вышли из ВКонтакте."); if (D.analysis) renderPlatforms(); });
   $("saveTg").addEventListener("click", saveTg);
+  $("tgSendCode").addEventListener("click", onTgSendCode);
+  $("tgSubmitCode").addEventListener("click", () => submitTgAnswer("tgCode"));
+  $("tgSubmitPass").addEventListener("click", () => submitTgAnswer("tgPass"));
+  $("tgLogout").addEventListener("click", async () => { await tg.signOut(); renderTgAcc("Вы вышли из Telegram."); tgStep("phone"); if (D.analysis) renderPlatforms(); });
   $("tgEnabled").addEventListener("change", saveTg);
   $("getTg").addEventListener("click", () => openUrl("https://api.tgstat.ru/"));
   $("fbEnabled").addEventListener("change", () => { store.saveSettings({ fbEnabled: $("fbEnabled").checked }); if (D.analysis) renderPlatforms(); });
