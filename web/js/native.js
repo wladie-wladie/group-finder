@@ -81,7 +81,8 @@ async function check() {
         const list = await updater.list();
         bundle = (list.bundles || []).find(b => b.version === info.version && b.status !== "error") || null;
       } catch (_) {}
-      if (!bundle) bundle = await updater.download({ url: info.url, version: info.version });
+      // The updater refuses bundles without a SHA-256 checksum (published in update.json).
+      if (!bundle) bundle = await updater.download({ url: info.url, version: info.version, checksum: info.checksum || "" });
       await updater.next({ id: bundle.id });
       readyBundle = bundle;
       setStatus("ready", info.version);

@@ -36,7 +36,7 @@ jobs:
           mkdir -p dist
           (cd www && zip -qr ../dist/bundle.zip .)
           cat > dist/update.json <<JSON
-          {"version":"${APP_VERSION}","url":"https://github.com/${{ github.repository }}/releases/download/apk/bundle.zip?v=${APP_VERSION}","builtAt":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
+          {"version":"${APP_VERSION}","url":"https://github.com/${{ github.repository }}/releases/download/apk/bundle.zip?v=${APP_VERSION}","checksum":"$(sha256sum dist/bundle.zip | cut -d' ' -f1)","builtAt":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
           JSON
       - run: npx cap sync android
       - name: Собрать APK
