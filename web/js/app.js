@@ -90,7 +90,7 @@ function platformState() {
     fb: S.fbEnabled, fbHow: web ? "web" : "links",
   };
 }
-const HOW = { api: "автоматически", web: "поиск Claude", links: "сами, по ссылкам", tgstat: "TGStat API", tgacc: "автоматически", browser: "сбор в приложении" };
+const HOW = { api: "автоматически", web: "поиск Claude", links: "сами, по ссылкам", tgstat: "TGStat API", tgacc: "автоматически", browser: "автоматически" };
 function renderPlatforms() {
   const st = platformState();
   const sel = D.platforms || { vk: true, tg: true, fb: true };
@@ -147,7 +147,7 @@ async function onSearch() {
   $("results").innerHTML = "";
   renderErrors();
   let found = [];
-  const manual = { vk: false, tg: false, fb: false, vkCollect: false }; // networks to search by hand
+  const manual = { vk: false, tg: false, fb: false }; // networks to search by hand
   const qs = D.queries;
   try {
     const web = async (platform, from, to) => {
@@ -173,7 +173,15 @@ async function onSearch() {
       if (how === "web") {
         try { found = found.concat(await web("vk", 0.05, 0.4)); } catch (e) { ui.errors.push("ВКонтакте: " + e.message); renderErrors(); manual.vk = true; }
       }
-      if (how === "browser") manual.vkCollect = true;
+      if (how === "browser") {
+        try {
+          const vk = await collectVk(qs, p => setProgress(p.login
+            ? "ВКонтакте просит войти — войдите в открывшемся окне, поиск продолжится сам"
+            : "ВКонтакте: запрос " + p.i + " из " + p.n + ", найдено групп: " + p.found, (p.i - 1) / p.n * 0.5));
+          found = found.concat(vk);
+          if (!vk.length) { ui.errors.push("Во ВКонтакте ничего не нашлось. Попробуйте другие запросы."); renderErrors(); }
+        } catch (e) { ui.errors.push(e.message || String(e)); renderErrors(); manual.vk = true; }
+      }
       if (how === "links") manual.vk = true;
     }
     if (use.tg) {
@@ -209,7 +217,7 @@ async function onSearch() {
         });
       } catch (e) { ui.errors.push("Оценка групп не удалась: " + e.message + " Список показан без оценки."); renderErrors(); }
     }
-    const anyManual = manual.vk || manual.tg || manual.fb || manual.vkCollect;
+    const anyManual = manual.vk || manual.tg || manual.fb;
     store.saveDraft({ results: found, searchedAt: Date.now(), manual: anyManual ? { queries: qs.slice(), nets: manual } : null });
   } finally {
     ui.busy = false;
@@ -224,14 +232,6 @@ function renderSearchBox() {
   const m = D.manual;
   if (!m || !m.queries || !m.queries.length) { $("searchBox").innerHTML = ""; return; }
   let html = "";
-  if (m.nets.vkCollect) {
-    html += '<div class="collect">' +
-      "<b>ВКонтакте: соберите группы одним проходом</b>" +
-      '<p class="hint">Откроется поиск сообществ ВК внутри приложения — по очереди по всем ' + m.queries.length + " запросам. Приложение само заберёт найденные группы с числом участников. Листайте страницу, чтобы собрать больше, и жмите «Следующий запрос». В первый раз ВК попросит войти.</p>" +
-      '<button class="primary wide" data-collect>' + (m.vkCollected ? "Собрать ещё раз" : "Собрать группы ВКонтакте") + "</button>" +
-      (m.vkCollected ? '<p class="status ok">Собрано из ВК: ' + m.vkCollected + "</p>" : "") +
-      "</div>";
-  }
   const nets = ["vk", "tg", "fb"].filter(k => m.nets[k]);
   if (nets.length) {
     const tgTip = m.nets.tg ? ' Telegram приложение может искать само — <button class="link" data-goto="settings">войдите в Telegram</button>.' : "";
@@ -244,28 +244,6 @@ function renderSearchBox() {
       "</div>";
   }
   $("searchBox").innerHTML = html;
-}
-
-async function onCollectVk() {
-  const m = D.manual;
-  if (!m) return;
-  try {
-    const groups = await collectVk(m.queries, n => { $("groupsCount").textContent = String(n); });
-    const fresh = groups.filter(g => !store.isBlocked(g.key));
-    fresh.forEach(quickRules);
-    const have = new Set((D.results || []).map(g => g.key));
-    const add = fresh.filter(g => !have.has(g.key));
-    store.saveDraft({ results: add.concat(D.results || []), manual: Object.assign({}, m, { vkCollected: (m.vkCollected || 0) + add.length }) });
-    renderResults();
-    toast(add.length ? "Добавлено групп ВК: " + add.length : "Новых групп не нашлось. Попробуйте другие запросы или пролистайте поиск ниже.");
-    if (add.length && S.claudeKey) {
-      try {
-        await scoreGroups({ key: S.claudeKey, model: S.model, summary: D.analysis && D.analysis.summary, text: D.text, groups: add });
-        store.saveDraft({ results: D.results });
-        renderResults();
-      } catch (_) {}
-    }
-  } catch (e) { toast(e.message || String(e)); }
 }
 
 async function addGroupFromText(text, subject) {
@@ -333,7 +311,7 @@ function tagsFor(g) {
   const t = [];
   if (g.rel != null) t.push('<span class="tag rel">Подходит на ' + g.rel + "/10</span>");
   if (g.manual) t.push('<span class="tag ok">Вы добавили</span>');
-  else if (g.viaBrowser) t.push('<span class="tag">Из поиска ВК: правила проверьте в группе</span>');
+  else if (g.viaBrowser) t.push('<span class="tag">Правила проверьте в группе</span>');
   else if (g.viaWeb) t.push('<span class="tag">Найдено поиском: правила проверьте в группе</span>');
   else if (g.platform === "vk") {
     if (g.canPost) t.push('<span class="tag ok">Можно опубликовать</span>');
@@ -602,7 +580,6 @@ function wire() {
     const t = e.target.closest("button, [data-expand]");
     if (!t) return;
     if (t.dataset.goto) { showTab(t.dataset.goto); return; }
-    if (t.hasAttribute("data-collect")) { onCollectVk(); return; }
     if (t.dataset.sn) { const q = (D.manual && D.manual.queries[+t.dataset.sq]) || ""; openUrl(SEARCH[t.dataset.sn].url(q)); return; }
     if (t.dataset.open) { openUrl(t.dataset.open); return; }
     if (t.dataset.rmq != null) { const q = D.queries.slice(); q.splice(+t.dataset.rmq, 1); store.saveDraft({ queries: q }); renderAnalysis(); return; }
