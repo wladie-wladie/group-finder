@@ -36,6 +36,7 @@ async function vk(method, params, getToken) {
       if (c === 5) throw new SourceError("vk", "Вход во ВКонтакте устарел. Войдите заново в настройках.");
       if (c === 17) throw new SourceError("vk", "ВКонтакте просит подтвердить вход. Войдите заново в настройках.");
       if (c === 29) throw new SourceError("vk", "ВКонтакте ограничил поиск на сегодня. Попробуйте завтра.");
+      if (/profile type/i.test(data.error.error_msg || "")) throw new SourceError("vk", "profile type: " + data.error.error_msg);
       throw new SourceError("vk", "ВКонтакте: " + (data.error.error_msg || "ошибка " + c));
     }
     return data.response;
