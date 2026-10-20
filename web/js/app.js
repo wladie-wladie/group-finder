@@ -5,7 +5,7 @@ import * as vkid from "./vkid.js";
 import { webSearchGroups } from "./websearch.js";
 import { SEARCH, parseGroupLink, manualGroup, fetchMeta } from "./links.js";
 import * as tg from "./tg.js";
-import { collectVk, collectorSupported } from "./vkbrowser.js";
+import { collectVk, collectFb, collectorSupported } from "./vkbrowser.js";
 import { openUrl, copyText, onShared, shareInSupported, initUpdates, checkForUpdates, applyUpdateNow, appVersion, updateStatus, isNative } from "./native.js";
 
 const $ = id => document.getElementById(id);
@@ -87,7 +87,7 @@ function platformState() {
   return {
     vk: true, vkHow: vkApi ? "api" : web ? "web" : collectorSupported() ? "browser" : "links",
     tg: true, tgHow: tgstat ? "tgstat" : tg.isSignedIn() ? "tgacc" : web ? "web" : "links",
-    fb: S.fbEnabled, fbHow: web ? "web" : "links",
+    fb: S.fbEnabled, fbHow: web ? "web" : collectorSupported() ? "browser" : "links",
   };
 }
 const HOW = { api: "автоматически", web: "поиск Claude", links: "сами, по ссылкам", tgstat: "TGStat API", tgacc: "автоматически", browser: "автоматически" };
@@ -200,7 +200,15 @@ async function onSearch() {
       } else manual.tg = true;
     }
     if (use.fb) {
-      if (st.fbHow === "web") {
+      if (st.fbHow === "browser") {
+        try {
+          const list = await collectFb(qs, p => setProgress(p.login
+            ? "Facebook просит войти — войдите в открывшемся окне, поиск продолжится сам"
+            : "Facebook: запрос " + p.i + " из " + p.n + ", найдено групп: " + p.found, 0.6 + (p.i - 1) / p.n * 0.2));
+          found = found.concat(list);
+          if (!list.length) { ui.errors.push("В Facebook ничего не нашлось. Попробуйте другие запросы."); renderErrors(); }
+        } catch (e) { ui.errors.push(e.message || String(e)); renderErrors(); manual.fb = true; }
+      } else if (st.fbHow === "web") {
         try { found = found.concat(await web("fb", 0.6, 0.78)); } catch (e) { ui.errors.push("Facebook: " + e.message); renderErrors(); manual.fb = true; }
       } else manual.fb = true;
     }
@@ -311,7 +319,7 @@ function tagsFor(g) {
   const t = [];
   if (g.rel != null) t.push('<span class="tag rel">Подходит на ' + g.rel + "/10</span>");
   if (g.manual) t.push('<span class="tag ok">Вы добавили</span>');
-  else if (g.viaBrowser) t.push('<span class="tag">Правила проверьте в группе</span>');
+  else if (g.viaBrowser) t.push(g.privateGroup ? '<span class="tag warn">Частная: сначала вступите</span>' : '<span class="tag">Правила проверьте в группе</span>');
   else if (g.viaWeb) t.push('<span class="tag">Найдено поиском: правила проверьте в группе</span>');
   else if (g.platform === "vk") {
     if (g.canPost) t.push('<span class="tag ok">Можно опубликовать</span>');

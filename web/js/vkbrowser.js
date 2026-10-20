@@ -9,20 +9,26 @@ let IAB = null;
 const iab = () => (IAB = IAB || cap().registerPlugin("InAppBrowser"));
 export const collectorSupported = available;
 
-const searchUrl = q => "https://vk.com/search/communities?q=" + encodeURIComponent(q);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-// Runs inside vk.com. QI is the query number, so late messages from an old page are ignored.
-const collector = qi => `(async () => {
-  const QI = ${qi};
+// Where and how to search on each network.
+const NETS = {
+  vk: { searchUrl: q => "https://vk.com/search/communities?q=" + encodeURIComponent(q), title: "Вход во ВКонтакте", name: "ВКонтакте", pause: [600, 1400] },
+  fb: { searchUrl: q => "https://m.facebook.com/search/groups/?q=" + encodeURIComponent(q), title: "Вход в Facebook", name: "Facebook", pause: [2500, 4500] },
+};
+
+// Runs inside the network's page. QI is the query number, so late messages from an old page are ignored.
+const collector = (qi, net) => `(async () => {
+  const QI = ${qi}, NET = "${net}";
   if (window.__gfRun === QI) return;
   window.__gfRun = QI;
   const send = m => { try { m.qi = QI; window.mobileApp.postMessage({ detail: m }); } catch (e) {} };
   const sleep = ms => new Promise(r => setTimeout(r, ms));
-  const loginPage = () => /(^|\\.)id\\.vk\\.(com|ru)$/.test(location.hostname) || /^\\/(login|auth|join)/.test(location.pathname) || !!document.querySelector('input[type="password"]');
+  const loginPage = () => /(^|\\.)id\\.vk\\.(com|ru)$/.test(location.hostname) || /^\\/(login|auth|join|checkpoint)/.test(location.pathname) || !!document.querySelector('input[type="password"]');
   if (loginPage()) { send({ type: "needLogin" }); return; }
   const SKIP = /^(feed|search|im|friends|groups|audio|audios|video|videos|clips|music|apps|services|settings|notifications|login|join|restore|support|legal|about|blog|dev|ads|pay|market|vkpay|bugs|docs|games|stickers|gifts|bookmarks|fave|photos|albums|wall|id\\d+|away\\.php|.*\\.php)$/i;
   const COUNT = /(\\d[\\d\\s\\u00a0.,]*)\\s*(тыс\\.?|млн|K|M)?\\s*(участник|подписчик|member|subscriber|follower)/i;
+  const COUNT_FB = /(?:участники|members)\\s*:?\\s*(\\d[\\d\\s\\u00a0.,]*)\\s*(тыс\\.?|млн|K|M)?/i;
   const num = (s, mult) => {
     let n = parseFloat(String(s).replace(/[\\s\\u00a0]/g, "").replace(",", "."));
     if (/тыс|K/i.test(mult || "")) n *= 1000;
@@ -35,11 +41,18 @@ const collector = qi => `(async () => {
     document.querySelectorAll("a[href]").forEach(a => {
       let u;
       try { u = new URL(a.getAttribute("href"), location.href); } catch (e) { return; }
-      if (!/(^|\\.)vk\\.(com|ru)$/.test(u.hostname)) return;
       const parts = u.pathname.split("/").filter(Boolean);
-      if (parts.length !== 1) return;
-      const slug = parts[0];
-      if (!/^[A-Za-z0-9_.]{2,}$/.test(slug) || SKIP.test(slug) || sent.has(slug.toLowerCase())) return;
+      let slug = null;
+      if (NET === "vk") {
+        if (!/(^|\\.)vk\\.(com|ru)$/.test(u.hostname) || parts.length !== 1) return;
+        slug = parts[0];
+        if (!/^[A-Za-z0-9_.]{2,}$/.test(slug) || SKIP.test(slug)) return;
+      } else {
+        if (!/(^|\\.)facebook\\.com$/.test(u.hostname) || parts[0] !== "groups" || !parts[1] || parts.length > 3) return;
+        slug = parts[1];
+        if (!/^[A-Za-z0-9_.-]{2,}$/.test(slug) || /^(feed|discover|joins|create|search|category|notifications|you)$/i.test(slug)) return;
+      }
+      if (sent.has(slug.toLowerCase())) return;
       const title = (a.textContent || a.getAttribute("aria-label") || "").replace(/\\s+/g, " ").trim();
       if (!title || title.length > 150) return;
       // Nearest block around the link with exactly one member count = one search result.
@@ -48,12 +61,12 @@ const collector = qi => `(async () => {
         box = box.parentElement;
         if (!box) break;
         text = (box.innerText || "").slice(0, 600);
-        const all = text.match(new RegExp(COUNT.source, "gi")) || [];
+        const all = (text.match(new RegExp(COUNT.source, "gi")) || []).concat(text.match(new RegExp(COUNT_FB.source, "gi")) || []);
         if (all.length > 1) { box = null; break; }
         if (all.length === 1) break;
       }
       if (!box) return;
-      const m = text.match(COUNT);
+      const m = text.match(COUNT) || text.match(COUNT_FB);
       if (!m) return;
       sent.add(slug.toLowerCase());
       items.push({ slug, title, members: num(m[1], m[2]), closed: /закрыт|частная|private group|closed group/i.test(text), about: text.replace(title, "").replace(/\\s+/g, " ").trim().slice(0, 200) });
@@ -82,16 +95,21 @@ const LOGIN_BANNER = `(() => {
   const b = document.createElement("div");
   b.id = "gf-login";
   b.style.cssText = "position:fixed;left:8px;right:8px;top:8px;z-index:2147483647;background:#2B3FD6;color:#fff;border-radius:12px;padding:10px 12px;font:14px/1.35 system-ui,sans-serif;box-shadow:0 6px 20px rgba(0,0,0,.35)";
-  b.textContent = "Войдите во ВКонтакте один раз — после входа «Где разместить» продолжит поиск сам и закроет это окно.";
+  b.textContent = "Войдите один раз — после входа «Где разместить» продолжит поиск сам и закроет это окно.";
   (document.body || document.documentElement).appendChild(b);
 })();`;
 
 let run = null;
 
-// Searches VK for every query and resolves with the groups found.
+// Searches the network for every query and resolves with the groups found.
 // onProgress({ i, n, found, login }) reports progress for the app's progress bar.
-export async function collectVk(queries, onProgress) {
-  if (!available()) throw new Error("Для поиска во ВКонтакте установите новую версию APK.");
+export const collectVk = (queries, onProgress) => collect("vk", queries, onProgress);
+export const collectFb = (queries, onProgress) => collect("fb", queries, onProgress);
+
+async function collect(net, queries, onProgress) {
+  if (!available()) throw new Error("Для этого поиска установите новую версию APK.");
+  const cfg = NETS[net];
+  const searchUrl = cfg.searchUrl;
   if (run) await run.stop();
 
   const groups = new Map();
@@ -101,7 +119,7 @@ export async function collectVk(queries, onProgress) {
   const withId = o => (id ? Object.assign({ id }, o) : o);
   const report = extra => onProgress && onProgress(Object.assign({ i: qi + 1, n: queries.length, found: groups.size, login: loginShown }, extra || {}));
   const banner = () => iab().executeScript(withId({ code: LOGIN_BANNER })).catch(() => {});
-  const injectCollector = () => iab().executeScript(withId({ code: collector(qi) })).catch(() => {});
+  const injectCollector = () => iab().executeScript(withId({ code: collector(qi, net) })).catch(() => {});
 
   const finished = new Promise(resolve => {
     run = {
@@ -124,8 +142,9 @@ export async function collectVk(queries, onProgress) {
   listeners.push(await iab().addListener("urlChangeEvent", async ev => {
     if (stopped || !loginShown) return;
     const url = String((ev && ev.url) || "");
-    // Signed in: VK leaves id.vk.* and the login pages.
-    if (/^https:\/\/(m\.)?vk\.(com|ru)\//.test(url) && !/\/(login|auth|join)/.test(url)) {
+    // Signed in: the browser leaves id.vk.* and the login pages.
+    const home = net === "vk" ? /^https:\/\/(m\.)?vk\.(com|ru)\//.test(url) : /^https:\/\/(m\.|www\.)?facebook\.com\//.test(url);
+    if (home && !/\/(login|auth|join|checkpoint|recover)/.test(url)) {
       loginShown = false;
       await sleep(1500);
       try { await iab().hide(withId({})); } catch (_) {}
@@ -141,12 +160,14 @@ export async function collectVk(queries, onProgress) {
     if (stopped || d.qi !== qi) return;
     if (d.type === "groups") {
       (d.items || []).forEach(it => {
-        if (it.closed) return;
-        const key = "vk:" + String(it.slug).toLowerCase();
+        if (it.closed && net === "vk") return; // closed VK groups: posting is impossible
+        const key = net + ":" + String(it.slug).toLowerCase();
         const ex = groups.get(key);
         if (ex) { if (!ex.queries.includes(queries[qi])) ex.queries.push(queries[qi]); return; }
         groups.set(key, {
-          key, platform: "vk", title: String(it.title).slice(0, 120), url: "https://vk.com/" + it.slug,
+          key, platform: net, title: String(it.title).slice(0, 120),
+          url: net === "vk" ? "https://vk.com/" + it.slug : "https://www.facebook.com/groups/" + it.slug,
+          privateGroup: net === "fb" && !!it.closed,
           members: Number(it.members) || 0, description: String(it.about || ""), viaBrowser: true,
           canPost: false, canSuggest: false, closed: false, queries: [queries[qi]],
         });
@@ -172,7 +193,7 @@ export async function collectVk(queries, onProgress) {
         if (qi === 0) {
           const r = await iab().openWebView({
             url: searchUrl(queries[0]),
-            title: "Вход во ВКонтакте",
+            title: cfg.title,
             toolbarType: "activity",
             preventDeeplink: true,
             hidden: true,
@@ -192,7 +213,7 @@ export async function collectVk(queries, onProgress) {
           if (waited >= 40000) break;
         }
         pageDone = null;
-        if (!stopped) await sleep(600 + Math.random() * 800); // a human pace between searches
+        if (!stopped) await sleep(cfg.pause[0] + Math.random() * (cfg.pause[1] - cfg.pause[0])); // a human pace between searches
       }
     } catch (_) {
       // the browser failed to open: return what we have
