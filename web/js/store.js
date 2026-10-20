@@ -19,6 +19,7 @@ const DEFAULT_SETTINGS = {
   tgstatToken: "",
   fbEnabled: true,
   webSearch: false,
+  autoCollect: false, // hidden-browser collection on VK/Facebook: off, both networks ended sessions
   onlyPostable: true,
   hideForbidden: false,
 };

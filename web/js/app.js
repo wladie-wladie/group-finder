@@ -85,9 +85,9 @@ function platformState() {
   const vkApi = vkid.isSignedIn() && !S.vkApiBlocked;
   const tgstat = S.tgEnabled && !!S.tgstatToken;
   return {
-    vk: true, vkHow: vkApi ? "api" : web ? "web" : collectorSupported() ? "browser" : "links",
+    vk: true, vkHow: vkApi ? "api" : web ? "web" : S.autoCollect && collectorSupported() ? "browser" : "links",
     tg: true, tgHow: tgstat ? "tgstat" : tg.isSignedIn() ? "tgacc" : web ? "web" : "links",
-    fb: S.fbEnabled, fbHow: web ? "web" : collectorSupported() ? "browser" : "links",
+    fb: S.fbEnabled, fbHow: web ? "web" : S.autoCollect && collectorSupported() ? "browser" : "links",
   };
 }
 const HOW = { api: "автоматически", web: "поиск Claude", links: "сами, по ссылкам", tgstat: "TGStat API", tgacc: "автоматически", browser: "автоматически" };
@@ -166,8 +166,8 @@ async function onSearch() {
           if (/profile type|тип профиля/i.test(e.message)) {
             // VK gives group search only to verified business apps.
             store.saveSettings({ vkApiBlocked: true });
-            how = S.claudeKey && S.webSearch ? "web" : collectorSupported() ? "browser" : "links";
-          } else { ui.errors.push(e.message); renderErrors(); how = collectorSupported() ? "browser" : "links"; }
+            how = S.claudeKey && S.webSearch ? "web" : S.autoCollect && collectorSupported() ? "browser" : "links";
+          } else { ui.errors.push(e.message); renderErrors(); how = "links"; }
         }
       }
       if (how === "web") {
@@ -429,6 +429,7 @@ function renderSettings() {
   $("tgEnabled").checked = S.tgEnabled;
   $("tgstatToken").value = S.tgstatToken;
   $("fbEnabled").checked = S.fbEnabled;
+  $("autoCollect").checked = !!S.autoCollect;
   $("webSearch").checked = !!(S.webSearch && S.claudeKey);
   if (!$("claudeStatus").textContent) setStatus("claudeStatus", S.claudeKey ? "Ключ сохранён." : "Ключ не добавлен — всё работает бесплатно.", S.claudeKey ? "ok" : "");
   renderVk();
@@ -628,6 +629,7 @@ function wire() {
   $("tgLogout").addEventListener("click", async () => { await tg.signOut(); renderTgAcc("Вы вышли из Telegram."); tgStep("phone"); if (D.analysis) renderPlatforms(); });
   $("tgEnabled").addEventListener("change", saveTg);
   $("getTg").addEventListener("click", () => openUrl("https://api.tgstat.ru/"));
+  $("autoCollect").addEventListener("change", () => { store.saveSettings({ autoCollect: $("autoCollect").checked }); if (D.analysis) renderPlatforms(); });
   $("fbEnabled").addEventListener("change", () => { store.saveSettings({ fbEnabled: $("fbEnabled").checked }); if (D.analysis) renderPlatforms(); });
   $("checkUpdates").addEventListener("click", async () => {
     setStatus("updateStatus", "Проверяю обновления…");
