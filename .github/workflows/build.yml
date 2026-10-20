@@ -1,0 +1,63 @@
+name: Сборка APK и обновления
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  APP_VERSION: 1.0.${{ github.run_number }}
+
+jobs:
+  android:
+    name: APK и пакет обновления
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build:web
+      - name: Пакет обновления
+        run: |
+          mkdir -p dist
+          (cd www && zip -qr ../dist/bundle.zip .)
+          cat > dist/update.json <<JSON
+          {"version":"${APP_VERSION}","url":"https://github.com/${{ github.repository }}/releases/download/apk/bundle.zip?v=${APP_VERSION}","builtAt":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
+          JSON
+      - run: npx cap sync android
+      - name: Собрать APK
+        working-directory: android
+        env:
+          ANDROID_VERSION_CODE: ${{ github.run_number }}
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+          cp app/build/outputs/apk/release/app-release.apk ../dist/gde-razmestit.apk
+      - name: Опубликовать APK и обновление
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk
+          name: Где разместить — APK
+          body: |
+            Последняя сборка: версия ${{ env.APP_VERSION }}.
+            Установите gde-razmestit.apk на Android. Дальше приложение обновляется само, переустанавливать APK нужно только если об этом попросят.
+          files: |
+            dist/gde-razmestit.apk
+            dist/bundle.zip
+            dist/update.json
+          make_latest: true
+          overwrite_files: true

@@ -1,0 +1,18 @@
+{
+  "appId": "io.github.wladie.groupfinder",
+  "appName": "Где разместить",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": false
+  },
+  "plugins": {
+    "CapacitorHttp": {
+      "enabled": true
+    },
+    "CapacitorUpdater": {
+      "autoUpdate": false,
+      "statsUrl": "",
+      "appReadyTimeout": 10000
+    }
+  }
+}
