@@ -1,4 +1,4 @@
-// Where groups come from: VK API (free, needs a VK sign-in), TGStat API (paid, optional),
+// Where groups come from: VK API (free, needs a VK ID sign-in), TGStat API (paid, optional),
 // and Facebook search links (Facebook has no public group search API).
 const VK_API = "https://api.vk.com/method/";
 const VK_V = "5.199";
@@ -8,32 +8,15 @@ export class SourceError extends Error {
   constructor(source, message) { super(message); this.source = source; }
 }
 
-/* ---------- VK sign-in ---------- */
-
-export function vkAuthUrl(appId) {
-  const p = new URLSearchParams({
-    client_id: String(appId).trim(),
-    display: "mobile",
-    redirect_uri: "https://oauth.vk.com/blank.html",
-    scope: "groups,offline",
-    response_type: "token",
-    v: VK_V,
-  });
-  return "https://oauth.vk.com/authorize?" + p.toString();
-}
-
-// Accepts the whole address from the browser after sign-in, or the bare token.
-export function parseVkToken(input) {
-  const s = String(input || "").trim();
-  const m = s.match(/access_token=([^&\s#]+)/);
-  if (m) return decodeURIComponent(m[1]);
-  if (/^[A-Za-z0-9._-]{40,}$/.test(s)) return s;
-  return "";
-}
+/* ---------- VK ---------- */
+// getToken(force) returns a working access token (see vkid.js); force = refresh it first.
 
 let lastVkCall = 0;
-async function vk(method, params, token) {
-  for (let attempt = 0; attempt < 3; attempt++) {
+async function vk(method, params, getToken) {
+  let refreshed = false;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    let token;
+    try { token = await getToken(false); } catch (e) { throw new SourceError("vk", e.message); }
     const wait = 360 - (Date.now() - lastVkCall); // VK allows ~3 requests per second
     if (wait > 0) await sleep(wait);
     lastVkCall = Date.now();
@@ -46,6 +29,10 @@ async function vk(method, params, token) {
     if (data && data.error) {
       const c = data.error.error_code;
       if (c === 6 || c === 9) { await sleep(1200); continue; } // too many requests
+      if (c === 5 && !refreshed) {
+        refreshed = true;
+        try { await getToken(true); continue; } catch (e) { throw new SourceError("vk", e.message); }
+      }
       if (c === 5) throw new SourceError("vk", "Вход во ВКонтакте устарел. Войдите заново в настройках.");
       if (c === 17) throw new SourceError("vk", "ВКонтакте просит подтвердить вход. Войдите заново в настройках.");
       if (c === 29) throw new SourceError("vk", "ВКонтакте ограничил поиск на сегодня. Попробуйте завтра.");
@@ -56,17 +43,17 @@ async function vk(method, params, token) {
   throw new SourceError("vk", "ВКонтакте просит делать запросы реже. Попробуйте через минуту.");
 }
 
-export async function vkCheck(token) {
-  const r = await vk("users.get", {}, token);
+export async function vkCheck(getToken) {
+  const r = await vk("users.get", {}, getToken);
   const u = r && r[0];
   return u ? (u.first_name + " " + u.last_name).trim() : "";
 }
 
 // Returns groups found by all queries, with details (members, whether you can post).
-export async function vkSearch(queries, token, onProgress) {
+export async function vkSearch(queries, getToken, onProgress) {
   const byId = new Map();
   for (let i = 0; i < queries.length; i++) {
-    const r = await vk("groups.search", { q: queries[i], count: 100 }, token);
+    const r = await vk("groups.search", { q: queries[i], count: 100 }, getToken);
     ((r && r.items) || []).forEach(g => {
       const ex = byId.get(g.id);
       if (ex) ex.queries.push(queries[i]);
@@ -80,7 +67,7 @@ export async function vkSearch(queries, token, onProgress) {
     const r = await vk("groups.getById", {
       group_ids: ids.slice(i, i + 400).join(","),
       fields: "members_count,can_post,can_suggest,description,activity,is_closed,status,city",
-    }, token);
+    }, getToken);
     const list = Array.isArray(r) ? r : (r && r.groups) || [];
     list.forEach(g => {
       const shortName = g.screen_name || "club" + g.id;

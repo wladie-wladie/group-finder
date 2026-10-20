@@ -88,22 +88,13 @@
 
       <div class="set">
         <h2 class="sec">ВКонтакте</h2>
-        <p class="hint">Поиск групп ВК бесплатный, но ВК пускает только после входа. Вход нужен один раз.</p>
-        <ol class="steps">
-          <li>Создайте своё приложение на <button class="link" data-open="https://dev.vk.com/ru/admin/apps-list">dev.vk.com</button> (тип «Standalone» или «Web»), скопируйте его ID.</li>
-          <li>Вставьте ID ниже и нажмите «Войти через ВК».</li>
-          <li>После входа откроется пустая страница. Скопируйте её адрес целиком из адресной строки и вставьте в поле ниже.</li>
-        </ol>
-        <label class="field-label" for="vkAppId">ID приложения ВК</label>
-        <input id="vkAppId" inputmode="numeric" placeholder="51234567">
-        <button id="vkLogin" class="ghost wide">Войти через ВК</button>
-        <label class="field-label" for="vkToken">Адрес страницы после входа или токен</label>
-        <input id="vkToken" type="password" autocomplete="off" placeholder="https://oauth.vk.com/blank.html#access_token=…">
-        <div class="btns">
-          <button id="saveVk" class="primary">Сохранить</button>
-          <button id="logoutVk" class="ghost">Выйти</button>
-        </div>
+        <p class="hint">Поиск групп ВК бесплатный, но ВК пускает только после входа. Войти нужно один раз: откроется официальная страница VK ID, и после входа вы вернётесь сюда.</p>
         <p id="vkStatus" class="status"></p>
+        <div class="btns">
+          <button id="vkLogin" class="primary">Войти через ВК</button>
+          <button id="logoutVk" class="ghost" hidden>Выйти</button>
+        </div>
+        <p id="vkReinstall" class="hint" hidden>Для входа через ВК нужна новая версия приложения. <button class="link" data-open="https://github.com/wladie-wladie/group-finder/releases/download/apk/gde-razmestit.apk">Скачать APK</button> и установите поверх текущей — все данные сохранятся.</p>
       </div>
 
       <div class="set">

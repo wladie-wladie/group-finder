@@ -1,6 +1,7 @@
 import * as store from "./store.js";
 import { analyzePost, scoreGroups, quickRules, checkKey, MODELS } from "./ai.js";
-import { vkAuthUrl, parseVkToken, vkCheck, vkSearch, tgSearch, tgCheck, fbLinks } from "./sources.js";
+import { vkCheck, vkSearch, tgSearch, tgCheck, fbLinks } from "./sources.js";
+import * as vkid from "./vkid.js";
 import { openUrl, copyText, initUpdates, checkForUpdates, applyUpdateNow, appVersion, updateStatus, isNative } from "./native.js";
 
 const $ = id => document.getElementById(id);
@@ -75,7 +76,7 @@ function renderAnalysis() {
 
 function platformState() {
   return {
-    vk: !!S.vkToken,
+    vk: vkid.isSignedIn(),
     tg: S.tgEnabled && !!S.tgstatToken,
     fb: S.fbEnabled,
   };
@@ -142,7 +143,7 @@ async function onSearch() {
   try {
     if (use.vk) {
       try {
-        const vk = await vkSearch(qs, S.vkToken, (i, n) => setProgress("ВКонтакте: запрос " + i + " из " + n, i / n * 0.6));
+        const vk = await vkSearch(qs, vkid.getToken, (i, n) => setProgress("ВКонтакте: запрос " + i + " из " + n, i / n * 0.6));
         found = found.concat(vk.filter(g => !g.closed));
       } catch (e) { ui.errors.push(e.message); renderErrors(); }
     }
@@ -313,13 +314,11 @@ function setStatus(id, text, kind) {
 function renderSettings() {
   $("claudeKey").value = S.claudeKey;
   $("model").innerHTML = Object.entries(MODELS).map(([id, label]) => '<option value="' + id + '"' + (S.model === id ? " selected" : "") + ">" + label + "</option>").join("");
-  $("vkAppId").value = S.vkAppId;
-  $("vkToken").value = S.vkToken;
   $("tgEnabled").checked = S.tgEnabled;
   $("tgstatToken").value = S.tgstatToken;
   $("fbEnabled").checked = S.fbEnabled;
   if (!$("claudeStatus").textContent) setStatus("claudeStatus", S.claudeKey ? "Ключ сохранён." : "Ключ не добавлен — работает простой режим.", S.claudeKey ? "ok" : "");
-  if (!$("vkStatus").textContent) setStatus("vkStatus", S.vkToken ? "Вход выполнен." : "Не подключено.", S.vkToken ? "ok" : "");
+  renderVk();
   if (!$("tgStatus").textContent) setStatus("tgStatus", S.tgEnabled ? (S.tgstatToken ? "Включено." : "Добавьте токен TGStat.") : "Выключено.", S.tgEnabled && S.tgstatToken ? "ok" : "");
   $("versionLine").textContent = "Версия " + appVersion() + (isNative() ? ". Приложение обновляется само: новая версия скачивается при запуске и включается после перезапуска." : ". Это браузерная версия, обновления приходят только в APK.");
   renderUpdateStatus();
@@ -351,23 +350,27 @@ async function saveClaude() {
   renderAiHint();
 }
 
-async function saveVk() {
-  const appId = $("vkAppId").value.trim();
-  store.saveSettings({ vkAppId: appId });
-  const raw = $("vkToken").value.trim();
-  if (!raw) { setStatus("vkStatus", "Вставьте адрес страницы после входа.", "bad"); return; }
-  const token = parseVkToken(raw);
-  if (!token) {
-    setStatus("vkStatus", /error=/.test(raw) ? "ВК отказал во входе: " + decodeURIComponent((raw.match(/error_description=([^&]+)/) || [, "проверьте ID приложения"])[1]).replace(/\+/g, " ") : "В адресе нет токена. Скопируйте адрес целиком после входа.", "bad");
-    return;
-  }
-  setStatus("vkStatus", "Проверяю вход…");
+function renderVk(msg, kind) {
+  const inn = vkid.isSignedIn();
+  if (msg) setStatus("vkStatus", msg, kind);
+  else setStatus("vkStatus", inn ? "Вы вошли" + (vkid.signedInName() ? " как " + vkid.signedInName() : "") + "." : "Не подключено.", inn ? "ok" : "");
+  $("vkLogin").hidden = inn;
+  $("logoutVk").hidden = !inn;
+  const old = isNative() && !vkid.signInSupported();
+  $("vkReinstall").hidden = !old || inn;
+  $("vkLogin").disabled = old;
+}
+
+async function onVkLogin() {
+  if (!isNative()) { renderVk("Вход через ВК работает в приложении на телефоне.", "bad"); return; }
+  setStatus("vkStatus", "Открываю вход ВКонтакте…");
   try {
-    const name = await vkCheck(token);
-    store.saveSettings({ vkToken: token });
-    $("vkToken").value = token;
-    setStatus("vkStatus", "Вход выполнен" + (name ? ": " + name : "") + ".", "ok");
-  } catch (e) { setStatus("vkStatus", e.message, "bad"); }
+    await vkid.signIn();
+    setStatus("vkStatus", "Проверяю вход…");
+    try { const name = await vkCheck(vkid.getToken); vkid.setName(name); } catch (_) {}
+    renderVk();
+    toast("Вход во ВКонтакте выполнен.");
+  } catch (e) { renderVk(e.message || String(e), "bad"); }
   if (D.analysis) renderPlatforms();
 }
 
@@ -426,14 +429,8 @@ function wire() {
   $("saveClaude").addEventListener("click", saveClaude);
   $("model").addEventListener("change", () => store.saveSettings({ model: $("model").value }));
   $("getClaudeKey").addEventListener("click", () => openUrl("https://console.anthropic.com/settings/keys"));
-  $("vkLogin").addEventListener("click", () => {
-    const id = $("vkAppId").value.trim();
-    if (!/^\d+$/.test(id)) { setStatus("vkStatus", "Сначала вставьте ID приложения ВК (только цифры).", "bad"); return; }
-    store.saveSettings({ vkAppId: id });
-    openUrl(vkAuthUrl(id));
-  });
-  $("saveVk").addEventListener("click", saveVk);
-  $("logoutVk").addEventListener("click", () => { store.saveSettings({ vkToken: "" }); $("vkToken").value = ""; setStatus("vkStatus", "Вы вышли из ВК."); if (D.analysis) renderPlatforms(); });
+  $("vkLogin").addEventListener("click", onVkLogin);
+  $("logoutVk").addEventListener("click", () => { vkid.signOut(); renderVk("Вы вышли из ВКонтакте."); if (D.analysis) renderPlatforms(); });
   $("saveTg").addEventListener("click", saveTg);
   $("tgEnabled").addEventListener("change", saveTg);
   $("getTg").addEventListener("click", () => openUrl("https://api.tgstat.ru/"));
@@ -455,6 +452,7 @@ function init() {
   renderAnalysis();
   renderResults();
   wire();
+  vkid.initVkId();
   initUpdates(() => { $("updateBanner").hidden = false; if (ui.tab === "settings") renderUpdateStatus(); });
 }
 

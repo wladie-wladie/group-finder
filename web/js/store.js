@@ -14,8 +14,7 @@ function save(name, value) {
 const DEFAULT_SETTINGS = {
   claudeKey: "",
   model: "claude-sonnet-5-5",
-  vkAppId: "",
-  vkToken: "",
+  vkAuth: null,
   tgEnabled: false,
   tgstatToken: "",
   fbEnabled: true,
